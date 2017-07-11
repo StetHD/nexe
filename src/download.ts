@@ -1,10 +1,13 @@
-import download from 'download'
+import download = require('download')
 import { isDirectoryAsync } from './util'
+import { LogStep } from "./logger";
+import { IncomingMessage } from "http";
+import { NexeCompiler } from "./compiler";
 
-function fetchNodeSourceAsync (cwd, url, step, options = {}) {
-  const setText = (p) => step.modify(`Downloading Node: ${p.toFixed()}%...`)
+function fetchNodeSourceAsync (cwd: string, url:string , step: LogStep, options = {}) {
+  const setText = (p: number) => step.modify(`Downloading Node: ${p.toFixed()}%...`)
   return download(url, cwd, Object.assign(options, { extract: true, strip: 1 }))
-    .on('response', res => {
+    .on('response', (res: IncomingMessage) => {
       const total = +res.headers['content-length']
       let current = 0
       res.on('data', data => {
@@ -25,7 +28,7 @@ function fetchNodeSourceAsync (cwd, url, step, options = {}) {
  * @param {*} compiler
  * @param {*} next
  */
-export default async function downloadNode (compiler, next) {
+export default async function downloadNode (compiler: NexeCompiler, next: () => Promise<void>) {
   const { src, log } = compiler
   const { version, sourceUrl, downloadOptions } = compiler.options
   const url = sourceUrl || `https://nodejs.org/dist/v${version}/node-v${version}.tar.gz`

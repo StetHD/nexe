@@ -1,12 +1,30 @@
 import { BindingsRewrite } from './bindings-rewrite'
 
+interface FuseBoxFile {
+  info: { absPath: string }
+  analysis: {
+    dependencies: string[]
+    requiresRegeneration: boolean
+  }
+  loadContents(): void
+  makeAnalysis(parsingOptions: any, traversalPlugin: {
+    plugins: Array<{
+      onNode(file: FuseBoxFile, node: any, parent: any): void
+      onEnd(file: FuseBoxFile): void
+    }>
+  }): void
+}
+
+
 export class NativeModulePlugin {
-  constructor (...moduleNames) {
+  public test: RegExp
+  public limit2Progject = false
+
+  constructor (...moduleNames: string[]) {
     this.test = new RegExp(`node_modules\/(${moduleNames.join('|')}).*\.js`)
-    this.limit2project = false
   }
 
-  transform (file) {
+  transform (file: FuseBoxFile) {
     const bindingsRewrite = new BindingsRewrite()
     file.loadContents()
     file.makeAnalysis(null, {

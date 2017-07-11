@@ -1,5 +1,5 @@
 import { normalize, join } from 'path'
-import Bluebird from 'bluebird'
+import * as Bluebird from 'bluebird'
 import { Buffer } from 'buffer'
 import { createHash } from 'crypto'
 import { createReadStream } from 'fs'
@@ -14,6 +14,7 @@ import {
   dequote,
   isWindows
 } from './util'
+import { NexeOptions } from "./options";
 
 const isBsd = Boolean(~process.platform.indexOf('bsd'))
 const make = isWindows ? 'vcbuild.bat' : isBsd ? 'gmake' : 'make'
@@ -22,25 +23,59 @@ const marker = Buffer.from('<nexe~sentinel>').toString('hex')
 const tail = `\n//${marker}`
 const needle = Buffer.from(marker)
 const fixedIntegerLength = 10
-const padLeft = (x, l = fixedIntegerLength, c = '0') => (c.repeat(l) + x).slice(-l)
-const inflate = (value, size) => {
+const padLeft = (x: string | number, l = fixedIntegerLength, c = '0') => (c.repeat(l) + x).slice(-l)
+const inflate = (value: string, size: number) => {
   if (!size || value.length >= size) {
     return value
   }
   return value + ' '.repeat(size - value.length)
 }
 
+interface NexeFile {
+  filename: string,
+  contents: string
+}
+
+interface NexeHeader {
+  /**
+   * Zero padded number indicating the extra size available in the binary
+   */
+  paddingSize: string
+  /**
+   *
+   */
+  binaryOffset: string
+  version: string
+}
+
+
 export class NexeCompiler {
-  constructor (options) {
-    this.start = Date.now()
+  private start = Date.now()
+  private env = { ...process.env }
+  private compileStep: { modify: Function, log: Function }
+
+  public options: NexeOptions
+  public log = new Logger(this.options.loglevel)
+  public src = join(this.options.temp, this.options.version)
+  public files: NexeFile[] = []
+  public input: string
+  public output: string | null
+
+  public resources: { bundle: string, index: { [key: string]: number[] } } = {
+    index: {},
+    bundle: ''
+  }
+  public readFileAsync: (file: string) => Promise<NexeFile>
+  public writeFileAsync: (file:string, contents: Buffer | string) => Promise<void>
+  public replaceInFileAsync: (file: string, replacer: any, replaceValue: string) => Promise<void>
+  public setFileContentsAsync: (file: string, contents: string | Buffer) => Promise<void>
+
+  private nodeSrcBinPath = isWindows
+    ? join(this.src, 'Release', 'node.exe')
+    : join(this.src, 'out', 'Release', 'node')
+
+  constructor (options: NexeOptions) {
     const { python } = this.options = options
-    this.log = new Logger(options.loglevel)
-    this.src = join(options.temp, options.version)
-    this.env = Object.assign({}, process.env)
-    this.files = []
-    this.nodeSrcBinPath = isWindows
-      ? join(this.src, 'Release', 'node.exe')
-      : join(this.src, 'out', 'Release', 'node')
 
     if (python) {
       if (isWindows) {
@@ -50,7 +85,7 @@ export class NexeCompiler {
       }
     }
 
-    this.readFileAsync = async (file) => {
+    this.readFileAsync = async (file: string) => {
       let cachedFile = this.files.find(x => normalize(x.filename) === normalize(file))
       if (!cachedFile) {
         cachedFile = {
@@ -63,11 +98,11 @@ export class NexeCompiler {
       return cachedFile
     }
     this.writeFileAsync = (file, contents) => writeFileAsync(join(this.src, file), contents)
-    this.replaceInFileAsync = async (file, ...replacements) => {
+    this.replaceInFileAsync = async (file, replace: string | RegExp, value: string) => {
       const entry = await this.readFileAsync(file)
-      entry.contents = entry.contents.replace(...replacements)
+      entry.contents = entry.contents.replace(replace, value)
     }
-    this.setFileContentsAsync = async (file, contents) => {
+    this.setFileContentsAsync = async (file: string, contents: string) => {
       const entry = await this.readFileAsync(file)
       entry.contents = contents
     }
@@ -79,7 +114,7 @@ export class NexeCompiler {
     return this.log.flush().then(x => process.exit(code))
   }
 
-  _findPaddingSize (size, override = this.options.padding) {
+  _findPaddingSize (size: number, override = this.options.padding) {
     if (override === 0) {
       return 0
     }
@@ -91,14 +126,14 @@ export class NexeCompiler {
     return padding
   }
 
-  _getNodeExecutableLocation (target) {
+  _getNodeExecutableLocation (target?: string | null) {
     if (target) {
       return join(this.options.temp, target)
     }
     return this.nodeSrcBinPath
   }
 
-  _runBuildCommandAsync (command, args) {
+  _runBuildCommandAsync (command: string, args: string[]) {
     return new Bluebird((resolve, reject) => {
       spawn(command, args, {
         cwd: this.src,
@@ -130,14 +165,14 @@ export class NexeCompiler {
     return this._buildAsync()
   }
 
-  _getPayload (header) {
+  _getPayload (header: NexeHeader) {
     return this._serializeHeader(header) + this.input + '/**' + this.resources.bundle + `**/`
   }
 
   _generateHeader () {
     const zeros = padLeft(0)
     const version = ['configure', 'vcBuild', 'make'].reduce((a, c) => {
-      return (a += this.options[c].slice().sort().join())
+      return (a += (this.options as any)[c].slice().sort().join())
     }, '') + this.options.enableNodeCli
     const header = {
       version: padLeft(0, 32),
@@ -155,7 +190,7 @@ export class NexeCompiler {
     return header
   }
 
-  async _getExistingBinaryHeaderAsync (target) {
+  async _getExistingBinaryHeaderAsync (target: string | undefined | null) {
     const filename = this._getNodeExecutableLocation(target)
     const existingBinary = await pathExistsAsync(filename)
     if (existingBinary) {
@@ -164,16 +199,16 @@ export class NexeCompiler {
     return null
   }
 
-  _extractHeaderAsync (path) {
+  _extractHeaderAsync (path: string): Promise<NexeHeader> {
     const binary = createReadStream(path)
     const haystack = new Needle(needle)
     let needles = 0
-    let stackCache = []
+    let stackCache: Buffer[] = []
     return new Promise((resolve, reject) => {
       binary.on('error', reject).pipe(haystack)
         .on('error', reject)
         .on('close', () => reject(new Error(`Binary: ${path} is not compatible with nexe`)))
-        .on('haystack', x => needles && stackCache.push(x))
+        .on('haystack', (x: Buffer) => needles && stackCache.push(x))
         .on('needle', () => {
           if (++needles === 2) {
             resolve(JSON.parse(Buffer.concat(stackCache).toString()))
@@ -184,11 +219,11 @@ export class NexeCompiler {
     })
   }
 
-  _serializeHeader (header) {
+  _serializeHeader (header: NexeHeader) {
     return `/**${marker}${JSON.stringify(header)}${marker}**/process.__nexe=${JSON.stringify(header)};`
   }
 
-  async setMainModule (compiler, next) {
+  async setMainModule (compiler: NexeCompiler, next: () => Promise<void>) {
     await next()
     const header = compiler._generateHeader()
     const contents = inflate(this._getPayload(header), +header.paddingSize) + tail
@@ -209,7 +244,7 @@ export class NexeCompiler {
       prebuiltBinary = createReadStream(location)
     }
     if (target) {
-      throw new Error('\nNot Implemented, use --build during beta')
+      throw '\nNot Implemented, use --build during beta\n'
       // prebuiltBinary = await this._fetchPrebuiltBinaryAsync(target)
     }
     if (!prebuiltBinary) {
@@ -222,7 +257,7 @@ export class NexeCompiler {
     )
   }
 
-  _assembleDeliverable (header, binary) {
+  _assembleDeliverable (header: NexeHeader, binary: NodeJS.ReadableStream) {
     const haystack = new Needle(Buffer.concat([Buffer.from('/**'), needle]))
     const artifact = new Readable({ read () {} })
     let needles = 0
@@ -231,7 +266,7 @@ export class NexeCompiler {
     haystack
       .on('close', () => artifact.push(null))
       .on('needle', () => ++needles && haystack.needle(needle))
-      .on('haystack', x => {
+      .on('haystack', (x: Buffer) => {
         if (!needles) {
           currentStackSize += x.length
           artifact.push(x)

@@ -1,22 +1,22 @@
 import { join, dirname } from 'path'
 import { readdir, unlink } from 'fs'
 import { readFileAsync, writeFileAsync, isDirectoryAsync } from './util'
-import Bluebird from 'bluebird'
-import mkdirp from 'mkdirp'
+import { promisify, map } from 'bluebird'
+import * as mkdirp from 'mkdirp'
+import { NexeCompiler } from "./compiler";
 
-const { promisify, map } = Bluebird
 const mkdirpAsync = promisify(mkdirp)
-const unlinkAsync = promisify(unlink)
+const unlinkAsync = promisify(unlink) as any as (path: string) => PromiseLike<void>
 const readdirAsync = promisify(readdir)
 
-function readDirAsync (dir) {
-  return readdirAsync(dir).map((file) => {
+function readDirAsync (dir: string): PromiseLike<string[]> {
+  return readdirAsync(dir).map((file: string) => {
     const path = join(dir, file)
-    return isDirectoryAsync(path).then(x => x ? readDirAsync(path) : path)
-  }).reduce((a, b) => a.concat(b), [])
+    return isDirectoryAsync(path).then((x: boolean) => x ? readDirAsync(path) : path as any)
+  }).reduce((a: string[], b: string[] | string) => a.concat(b), [])
 }
 
-function maybeReadFileContentsAsync (file) {
+function maybeReadFileContentsAsync (file: string) {
   return readFileAsync(file, 'utf-8')
     .catch(e => {
       if (e.code === 'ENOENT') {
@@ -36,14 +36,14 @@ function maybeReadFileContentsAsync (file) {
  *  - Finally, The patched files are written into source.
  *
  */
-export default async function artifacts (compiler, next) {
+export default async function artifacts (compiler: NexeCompiler, next: () => Promise<void>) {
   const { src } = compiler
   const temp = join(src, 'nexe')
   await mkdirpAsync(temp)
   const tmpFiles = await readDirAsync(temp)
 
   await map(tmpFiles, async (path) => {
-    return compiler.writeFileAsync(path.replace(temp, ''), await readFileAsync(path))
+    return compiler.writeFileAsync(path.replace(temp, ''), await readFileAsync(path, 'utf-8'))
   })
 
   await next()

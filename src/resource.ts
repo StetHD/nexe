@@ -1,13 +1,11 @@
 import { each } from 'bluebird'
 import { readFileAsync, isDirectoryAsync } from './util'
 import { Buffer } from 'buffer'
-import globs from 'globby'
+import * as globs from 'globby'
+import { NexeCompiler } from "./compiler";
 
-export default async function resource (compiler, next) {
-  const resources = compiler.resources = {
-    index: {},
-    bundle: ''
-  }
+export default async function resource (compiler: NexeCompiler, next: () => Promise<void>) {
+  const resources = compiler.resources
 
   if (!compiler.options.resources.length) {
     return next()

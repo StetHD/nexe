@@ -1,10 +1,11 @@
 import { readFile, writeFile, stat } from 'fs'
-import Bluebird from 'bluebird'
-import rimraf from 'rimraf'
+import * as Bluebird from 'bluebird'
+import rimraf = require('rimraf')
 
-const rimrafAsync = Bluebird.promisify(rimraf)
+const { promisify } = Bluebird
+const rimrafAsync = promisify(rimraf) as any as (path: string) => Bluebird<void>
 
-function dequote (input) {
+function dequote (input: string) {
   input = input.trim()
   const singleQuote = input.startsWith('\'') && input.endsWith('\'')
   const doubleQuote = input.startsWith('"') && input.endsWith('"')
@@ -14,12 +15,17 @@ function dequote (input) {
   return input
 }
 
-const readFileAsync = Bluebird.promisify(readFile)
-const writeFileAsync = Bluebird.promisify(writeFile)
-const statAsync = Bluebird.promisify(stat)
+interface ReadFileAsync {
+  (path: string): Bluebird<Buffer>
+  (path: string, encoding: string): Bluebird<string>
+}
+
+const readFileAsync = promisify(readFile) as any as ReadFileAsync
+const writeFileAsync = promisify(writeFile) as any as (path: string, contents: string | Buffer) => Promise<void>
+const statAsync = promisify(stat)
 const isWindows = process.platform === 'win32'
 
-function pathExistsAsync (path) {
+function pathExistsAsync (path: string) {
   return statAsync(path).then(x => true, err => {
     if (err.code !== 'ENOENT') {
       throw err
@@ -28,7 +34,7 @@ function pathExistsAsync (path) {
   })
 }
 
-function isDirectoryAsync (path) {
+function isDirectoryAsync (path: string) {
   return statAsync(path)
     .then(x => x.isDirectory())
     .catch({ code: 'ENOENT' }, () => false)
